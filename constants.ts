@@ -9,6 +9,16 @@ export const AVAILABLE_VOICES: GoogleVoice[] = [
   { name: 'Zephyr', gender: 'Female', label: 'Zephyr (Gentle, airy)' },
 ];
 
+export const AVAILABLE_EMOTIONS = [
+  'Neutral',
+  'Happy',
+  'Sad',
+  'Angry',
+  'Surprised',
+  'Excited',
+  'Whispering'
+];
+
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   voiceName: 'Puck',
   pitch: 1.0,

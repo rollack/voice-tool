@@ -19,17 +19,35 @@ const decodeAudioData = (base64: string): Uint8Array => {
   return bytes;
 };
 
+// Map UI emotions to prompt adverbs/styles for better TTS results
+const EMOTION_PROMPTS: Record<string, string> = {
+  'Happy': 'cheerfully',
+  'Sad': 'sadly',
+  'Angry': 'angrily',
+  'Surprised': 'with surprise',
+  'Excited': 'excitedly',
+  'Whispering': 'whisper',
+};
+
 export const generateSpeech = async (
   text: string,
-  voiceName: string
+  voiceName: string,
+  emotion?: string
 ): Promise<Blob> => {
   try {
     const ai = getClient();
     
+    // Apply emotion guidance to the text prompt if present and not Neutral
+    let effectiveText = text;
+    if (emotion && emotion !== 'Neutral') {
+      const promptStyle = EMOTION_PROMPTS[emotion] || emotion.toLowerCase();
+      effectiveText = `Say ${promptStyle}: ${text}`;
+    }
+    
     // Using the TTS model as specified in the prompt
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: text }] }],
+      contents: [{ parts: [{ text: effectiveText }] }],
       config: {
         responseModalities: [Modality.AUDIO],
         speechConfig: {
@@ -48,18 +66,7 @@ export const generateSpeech = async (
 
     const audioBytes = decodeAudioData(base64Audio);
     // Return as a Blob for easy playback/download
-    return new Blob([audioBytes], { type: 'audio/wav' }); // PCM usually comes, but browser often handles it best if we treat generically or wrap in WAV container if raw. 
-    // Note: The API returns raw PCM usually or WAV depending on internal defaults if not specified. 
-    // The prompt examples imply raw usage with AudioContext. 
-    // For simplicity in this app to create a Blob URL, we will assume standard audio data.
-    // However, raw PCM cannot be played directly by <audio src="blob"> without a header.
-    // In a real production app, we would add a WAV header. 
-    // *Critically*, the Prompt example uses `decodeAudioData` with AudioContext.
-    // For the purpose of "Download MP3/WAV", we need a file.
-    // Since we can't easily add a WAV header without complex logic here, 
-    // we will rely on the fact that `gemini-2.5-flash-preview-tts` usually returns valid audio data (often WAV containerized or easily playable). 
-    // If it is raw PCM, the `<audio>` tag won't play it.
-    // *Fix:* We will attempt to use it as audio/mp3 or audio/wav.
+    return new Blob([audioBytes], { type: 'audio/wav' }); 
     
   } catch (error) {
     console.error("Error generating speech:", error);

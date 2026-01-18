@@ -8,10 +8,10 @@ export interface ScriptLine {
 
 export interface VoiceSettings {
   voiceName: string;
-  pitch: number; // 0.5 to 2.0 (handled via playbackRate in post-processing usually, but here stored for config)
-  speed: number; // 0.5 to 2.0
-  volume: number; // 0 to 1
-  emotion?: string; // Metadata for UI
+  pitch: number;
+  speed: number;
+  volume: number;
+  emotion: string;
 }
 
 export interface SpeakerConfig {
@@ -23,7 +23,13 @@ export interface SpeakerConfig {
 export interface ClonedVoice {
   id: string;
   name: string;
-  baseVoiceMap: string; // Map to a real underlying voice since we can't truly clone in this demo
+  baseVoiceMap: string;
+}
+
+export interface VoicePreset {
+  id: string;
+  name: string;
+  settings: VoiceSettings;
 }
 
 export interface GoogleVoice {

@@ -1,15 +1,18 @@
-import React, { useState, useRef } from 'react';
-import { SpeakerConfig, VoiceSettings, GoogleVoice, ClonedVoice } from '../types';
-import { AVAILABLE_VOICES } from '../constants';
+import React, { useState } from 'react';
+import { SpeakerConfig, VoiceSettings, GoogleVoice, ClonedVoice, VoicePreset } from '../types';
+import { AVAILABLE_VOICES, AVAILABLE_EMOTIONS } from '../constants';
 
 interface VoiceControlsProps {
   speakerName: string;
   config: SpeakerConfig;
   availableVoices: GoogleVoice[];
   clonedVoices: ClonedVoice[];
+  presets: VoicePreset[];
   onUpdate: (name: string, newConfig: SpeakerConfig) => void;
   onCloneClick: () => void;
   onPreview: (name: string) => void;
+  onSavePreset: (name: string, settings: VoiceSettings) => void;
+  onDeletePreset: (id: string) => void;
 }
 
 const VoiceControls: React.FC<VoiceControlsProps> = ({
@@ -17,11 +20,17 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
   config,
   availableVoices,
   clonedVoices,
+  presets,
   onUpdate,
   onCloneClick,
   onPreview,
+  onSavePreset,
+  onDeletePreset
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isNamingPreset, setIsNamingPreset] = useState(false);
+  const [presetName, setPresetName] = useState('');
+  const [showManagePresets, setShowManagePresets] = useState(false);
 
   const handleSettingChange = (key: keyof VoiceSettings, value: string | number) => {
     onUpdate(speakerName, {
@@ -36,8 +45,38 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
   const handlePreview = () => {
     setIsPlaying(true);
     onPreview(speakerName);
-    // Simulate playing reset for UI (actual playing handled by parent)
     setTimeout(() => setIsPlaying(false), 2000); 
+  };
+
+  const handleSaveClick = () => {
+    if (isNamingPreset) {
+      if (presetName.trim()) {
+        onSavePreset(presetName.trim(), config.settings);
+        setPresetName('');
+        setIsNamingPreset(false);
+      }
+    } else {
+      setIsNamingPreset(true);
+    }
+  };
+
+  const handleCancelSave = () => {
+    setIsNamingPreset(false);
+    setPresetName('');
+  };
+
+  const handlePresetSelect = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const presetId = e.target.value;
+    if (!presetId) return;
+    const preset = presets.find(p => p.id === presetId);
+    if (preset) {
+      onUpdate(speakerName, {
+        ...config,
+        settings: { ...preset.settings }
+      });
+    }
+    // Reset to "select" state
+    e.target.value = "";
   };
 
   return (
@@ -64,6 +103,85 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
       </div>
 
       <div className="space-y-3">
+        
+        {/* Presets Row */}
+        <div className="bg-slate-800/50 rounded p-2 flex flex-col gap-2">
+            <div className="flex justify-between items-center text-xs text-slate-400">
+                <span className="font-medium">Voice Presets</span>
+                <button 
+                    onClick={() => setShowManagePresets(!showManagePresets)}
+                    className="hover:text-indigo-400 transition-colors"
+                >
+                    {showManagePresets ? 'Done' : 'Manage'}
+                </button>
+            </div>
+            
+            {showManagePresets ? (
+                <div className="max-h-24 overflow-y-auto space-y-1 custom-scrollbar">
+                    {presets.length === 0 && <span className="text-xs text-slate-500 italic px-1">No presets saved.</span>}
+                    {presets.map(p => (
+                        <div key={p.id} className="flex items-center justify-between bg-slate-700 rounded px-2 py-1">
+                            <span className="text-xs text-slate-200 truncate" title={`Voice: ${p.settings.voiceName}, Emotion: ${p.settings.emotion}, Speed: ${p.settings.speed}x`}>{p.name}</span>
+                            <button 
+                                onClick={() => onDeletePreset(p.id)}
+                                className="text-red-400 hover:text-red-300"
+                                title="Delete Preset"
+                            >
+                                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="flex gap-2">
+                    {isNamingPreset ? (
+                        <div className="flex-1 flex gap-2 animate-in fade-in zoom-in-95 duration-200">
+                            <input 
+                                autoFocus
+                                type="text" 
+                                placeholder="Preset Name"
+                                value={presetName}
+                                onChange={e => setPresetName(e.target.value)}
+                                className="flex-1 min-w-0 bg-slate-900 border border-slate-600 text-xs rounded px-2 py-1 text-white focus:border-indigo-500 outline-none"
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleSaveClick();
+                                  if (e.key === 'Escape') handleCancelSave();
+                                }}
+                            />
+                            <button onClick={handleSaveClick} className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-2 py-1 rounded">Save</button>
+                            <button onClick={handleCancelSave} className="bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs px-2 py-1 rounded">Cancel</button>
+                        </div>
+                    ) : (
+                        <>
+                             <select
+                                className="flex-1 bg-slate-900 border border-slate-600 text-slate-300 text-xs rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 outline-none"
+                                onChange={handlePresetSelect}
+                                defaultValue=""
+                            >
+                                <option value="" disabled>Load Preset...</option>
+                                {presets.map(p => (
+                                    <option 
+                                        key={p.id} 
+                                        value={p.id} 
+                                        title={`Emotion: ${p.settings.emotion}, Speed: ${p.settings.speed}x, Pitch: ${p.settings.pitch}`}
+                                    >
+                                        {p.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <button 
+                                onClick={handleSaveClick}
+                                className="bg-slate-600 hover:bg-indigo-600 text-white text-xs px-3 py-1 rounded transition-colors"
+                                title="Save current settings as preset"
+                            >
+                                Save
+                            </button>
+                        </>
+                    )}
+                </div>
+            )}
+        </div>
+
         {/* Voice Selection */}
         <div>
           <label className="block text-xs text-slate-400 mb-1">Voice Model</label>
@@ -94,6 +212,20 @@ const VoiceControls: React.FC<VoiceControlsProps> = ({
                 + Clone
             </button>
           </div>
+        </div>
+
+        {/* Emotion Selector */}
+        <div>
+            <label className="block text-xs text-slate-400 mb-1">Emotion</label>
+            <select
+                className="w-full bg-slate-800 border border-slate-600 text-slate-200 text-sm rounded px-2 py-1 focus:ring-1 focus:ring-indigo-500 outline-none"
+                value={config.settings.emotion || 'Neutral'}
+                onChange={(e) => handleSettingChange('emotion', e.target.value)}
+            >
+                {AVAILABLE_EMOTIONS.map((emotion) => (
+                    <option key={emotion} value={emotion}>{emotion}</option>
+                ))}
+            </select>
         </div>
 
         {/* Sliders Grid */}
