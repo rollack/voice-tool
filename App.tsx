@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ScriptInput from './components/ScriptInput';
 import VoiceControls from './components/VoiceControls';
 import CloneVoiceModal from './components/CloneVoiceModal';
+import ManageClonedVoicesModal from './components/ManageClonedVoicesModal';
 import { ScriptLine, SpeakerConfig, VoiceSettings, ProcessingStatus, ClonedVoice, VoicePreset } from './types';
 import { AVAILABLE_VOICES, AVAILABLE_EMOTIONS, DEFAULT_VOICE_SETTINGS, INITIAL_SCRIPT_PLACEHOLDER } from './constants';
 import { generateSpeech } from './services/geminiService';
-import { audioBufferToWav, audioContext, concatenateAudioBuffers, decodeAudioData } from './utils/audioUtils';
+import { audioBufferToWav, audioContext, concatenateAudioBuffers, decodeAudioData, mixAudioBuffers } from './utils/audioUtils';
 
 const App: React.FC = () => {
   // State
@@ -15,6 +16,7 @@ const App: React.FC = () => {
   const [presets, setPresets] = useState<VoicePreset[]>([]);
   const [status, setStatus] = useState<ProcessingStatus>('idle');
   const [isCloneModalOpen, setIsCloneModalOpen] = useState(false);
+  const [isManageVoicesModalOpen, setIsManageVoicesModalOpen] = useState(false);
   const [progress, setProgress] = useState(0);
   const [generatedAudioUrl, setGeneratedAudioUrl] = useState<string | null>(null);
   const [backgroundMusic, setBackgroundMusic] = useState<File | null>(null);
@@ -24,7 +26,7 @@ const App: React.FC = () => {
   const [globalSettings, setGlobalSettings] = useState<VoiceSettings>(DEFAULT_VOICE_SETTINGS);
   const [randomizeVoice, setRandomizeVoice] = useState(true);
 
-  // Load Presets with migration for emotion field
+  // Load Presets
   useEffect(() => {
     const saved = localStorage.getItem('voice_presets');
     if (saved) {
@@ -47,7 +49,7 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Load Cloned Voices to ensure presets referencing them work
+  // Load Cloned Voices
   useEffect(() => {
     const saved = localStorage.getItem('cloned_voices');
     if (saved) {
@@ -65,7 +67,7 @@ const App: React.FC = () => {
       name,
       settings: { 
           ...settings,
-          emotion: settings.emotion || 'Neutral' // Explicitly ensure emotion is saved
+          emotion: settings.emotion || 'Neutral'
       } 
     };
     const updated = [...presets, newPreset];
@@ -84,11 +86,37 @@ const App: React.FC = () => {
     setGlobalSettings(prev => ({ ...prev, [key]: value }));
   };
 
+  // Cloned Voice Management
+  const handleCloneSave = (voice: ClonedVoice) => {
+    const updated = [...clonedVoices, voice];
+    setClonedVoices(updated);
+    localStorage.setItem('cloned_voices', JSON.stringify(updated));
+  };
+
+  const handleUpdateClonedVoice = (updatedVoice: ClonedVoice) => {
+      const updated = clonedVoices.map(v => v.id === updatedVoice.id ? updatedVoice : v);
+      setClonedVoices(updated);
+      localStorage.setItem('cloned_voices', JSON.stringify(updated));
+  };
+
+  const handleDeleteClonedVoice = (id: string) => {
+      const updated = clonedVoices.filter(v => v.id !== id);
+      setClonedVoices(updated);
+      localStorage.setItem('cloned_voices', JSON.stringify(updated));
+  };
+
+  // Sort Cloned Voices (Favorites first)
+  const sortedClonedVoices = useMemo(() => {
+      return [...clonedVoices].sort((a, b) => {
+          if (a.isFavorite && !b.isFavorite) return -1;
+          if (!a.isFavorite && b.isFavorite) return 1;
+          return a.name.localeCompare(b.name);
+      });
+  }, [clonedVoices]);
+
+
   // Script Parsing Logic
   const handleParseScript = useCallback((text: string) => {
-    // Regex to find "Speaker: Text" or "[Speaker: Text]"
-    // Format 1: [Speaker: Text]
-    // Format 2: Speaker: Text
     const regex = /(?:\[)?([a-zA-Z0-9\s]+)(?::|\])(?:\s*)(.*)/g;
     const lines: ScriptLine[] = [];
     const foundSpeakers = new Set<string>();
@@ -99,8 +127,6 @@ const App: React.FC = () => {
       if (match[2].trim()) {
         const speaker = match[1].trim();
         const content = match[2].trim();
-        
-        // Remove trailing bracket if it exists from Format 1
         const cleanContent = content.endsWith(']') ? content.slice(0, -1) : content;
 
         lines.push({
@@ -115,12 +141,10 @@ const App: React.FC = () => {
 
     setScriptLines(lines);
 
-    // Update speaker configs, preserving existing settings if speaker already exists
     setSpeakers(prev => {
       const newSpeakers = { ...prev };
       foundSpeakers.forEach(spk => {
         if (!newSpeakers[spk]) {
-          // Determine voice name based on settings
           let voiceName = globalSettings.voiceName;
           
           if (randomizeVoice) {
@@ -139,34 +163,28 @@ const App: React.FC = () => {
       });
       return newSpeakers;
     });
-  }, [globalSettings, randomizeVoice]); // Dependencies updated to include global settings
+  }, [globalSettings, randomizeVoice]);
 
-  // Initial Parse
   useEffect(() => {
     handleParseScript(INITIAL_SCRIPT_PLACEHOLDER);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, []);
 
-  // Handlers
   const handleSpeakerUpdate = (name: string, newConfig: SpeakerConfig) => {
     setSpeakers(prev => ({ ...prev, [name]: newConfig }));
-  };
-
-  const handleCloneSave = (voice: ClonedVoice) => {
-    const updated = [...clonedVoices, voice];
-    setClonedVoices(updated);
-    localStorage.setItem('cloned_voices', JSON.stringify(updated));
   };
 
   const handlePreviewVoice = async (speakerName: string) => {
     const config = speakers[speakerName];
     if (!config) return;
     
-    // Quick preview text
     const text = `Hello, I am ${speakerName}. This is how I sound.`;
     
     try {
-        // Handle cloned voice mapping (since API doesn't support custom models truly here, use base map)
+        if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+        }
+
         let voiceName = config.settings.voiceName;
         const cloned = clonedVoices.find(cv => cv.id === voiceName);
         if (cloned) voiceName = cloned.baseVoiceMap;
@@ -175,7 +193,6 @@ const App: React.FC = () => {
         const url = URL.createObjectURL(blob);
         const audio = new Audio(url);
         
-        // Apply rudimentary pitch/rate via Audio Element
         audio.playbackRate = config.settings.speed;
         audio.volume = config.settings.volume;
         
@@ -190,6 +207,10 @@ const App: React.FC = () => {
     setStatus('generating');
     setProgress(0);
     setGeneratedAudioUrl(null);
+    
+    if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+    }
 
     try {
       const audioBuffers: AudioBuffer[] = [];
@@ -213,7 +234,18 @@ const App: React.FC = () => {
       }
 
       setStatus('combining');
-      const finalBuffer = concatenateAudioBuffers(audioBuffers);
+      let finalBuffer = concatenateAudioBuffers(audioBuffers);
+
+      if (backgroundMusic) {
+          try {
+              const bgArrayBuffer = await backgroundMusic.arrayBuffer();
+              const bgAudioBuffer = await decodeAudioData(bgArrayBuffer);
+              finalBuffer = mixAudioBuffers(finalBuffer, bgAudioBuffer, 0.2);
+          } catch (e) {
+              console.warn("Background audio mixing failed, proceeding with speech only.", e);
+          }
+      }
+
       const wavBlob = audioBufferToWav(finalBuffer);
       const url = URL.createObjectURL(wavBlob);
       
@@ -293,7 +325,7 @@ const App: React.FC = () => {
                 </div>
             )}
 
-            {/* Global Settings Section (New Dedicated Card) */}
+            {/* Global Settings Section */}
             <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow-lg">
                 <button 
                     onClick={() => setShowGlobalSettings(!showGlobalSettings)}
@@ -310,7 +342,6 @@ const App: React.FC = () => {
                 
                 {showGlobalSettings && (
                     <div className="mt-4 space-y-4 animate-in slide-in-from-top-2 duration-200 border-t border-slate-700 pt-4">
-                        
                         <div className="flex items-center gap-3 bg-slate-900/50 p-3 rounded-lg border border-slate-700/50">
                             <input 
                                 type="checkbox" 
@@ -324,12 +355,10 @@ const App: React.FC = () => {
                                 <span className="block text-xs text-slate-500">Automatically assign different voices to new speakers</span>
                             </label>
                         </div>
-
                         <div className="grid grid-cols-2 gap-4">
-                            {/* Voice Select (Disabled if random) */}
                             <div>
-                                    <label className="block text-xs font-medium text-slate-400 mb-1.5">Default Voice</label>
-                                    <select
+                                <label className="block text-xs font-medium text-slate-400 mb-1.5">Default Voice</label>
+                                <select
                                     disabled={randomizeVoice}
                                     value={globalSettings.voiceName}
                                     onChange={(e) => handleGlobalSettingChange('voiceName', e.target.value)}
@@ -340,34 +369,32 @@ const App: React.FC = () => {
                                             <option key={v.name} value={v.name}>{v.label}</option>
                                         ))}
                                     </optgroup>
-                                    {clonedVoices.length > 0 && (
+                                    {sortedClonedVoices.length > 0 && (
                                         <optgroup label="My Cloned Voices">
-                                            {clonedVoices.map(cv => (
-                                                <option key={cv.id} value={cv.id}>{cv.name} (Custom)</option>
+                                            {sortedClonedVoices.map(cv => (
+                                                <option key={cv.id} value={cv.id}>
+                                                    {cv.isFavorite ? '★ ' : ''}{cv.name}
+                                                </option>
                                             ))}
                                         </optgroup>
                                     )}
-                                    </select>
+                                </select>
                             </div>
-
-                            {/* Emotion Select */}
                             <div>
-                                    <label className="block text-xs font-medium text-slate-400 mb-1.5">Default Emotion</label>
-                                    <select
+                                <label className="block text-xs font-medium text-slate-400 mb-1.5">Default Emotion</label>
+                                <select
                                     value={globalSettings.emotion}
                                     onChange={(e) => handleGlobalSettingChange('emotion', e.target.value)}
                                     className="w-full bg-slate-900 border border-slate-600 text-slate-200 text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
                                 >
-                                        {AVAILABLE_EMOTIONS.map(e => (
-                                            <option key={e} value={e}>{e}</option>
-                                        ))}
-                                    </select>
+                                    {AVAILABLE_EMOTIONS.map(e => (
+                                        <option key={e} value={e}>{e}</option>
+                                    ))}
+                                </select>
                             </div>
                         </div>
-
-                        {/* Sliders */}
                         <div className="grid grid-cols-2 gap-4">
-                                <div>
+                            <div>
                                 <div className="flex justify-between mb-1.5">
                                     <label className="text-xs font-medium text-slate-400">Speed</label>
                                     <span className="text-xs text-indigo-400 font-mono">{globalSettings.speed}x</span>
@@ -378,8 +405,8 @@ const App: React.FC = () => {
                                     onChange={(e) => handleGlobalSettingChange('speed', parseFloat(e.target.value))}
                                     className="w-full h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                                 />
-                                </div>
-                                <div>
+                            </div>
+                            <div>
                                 <div className="flex justify-between mb-1.5">
                                     <label className="text-xs font-medium text-slate-400">Pitch</label>
                                     <span className="text-xs text-indigo-400 font-mono">{globalSettings.pitch}</span>
@@ -390,7 +417,7 @@ const App: React.FC = () => {
                                     onChange={(e) => handleGlobalSettingChange('pitch', parseFloat(e.target.value))}
                                     className="w-full h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-indigo-500"
                                 />
-                                </div>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -398,10 +425,18 @@ const App: React.FC = () => {
 
             {/* Speaker Mapping */}
             <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 shadow-lg">
-                <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-                    <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
-                    Voice Mapping
-                </h2>
+                <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                        <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                        Voice Mapping
+                    </h2>
+                    <button 
+                        onClick={() => setIsManageVoicesModalOpen(true)}
+                        className="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors border border-slate-600"
+                    >
+                        Manage Voices
+                    </button>
+                </div>
                 
                 <div className="space-y-4">
                     {Object.keys(speakers).length === 0 ? (
@@ -416,7 +451,7 @@ const App: React.FC = () => {
                                 speakerName={name}
                                 config={config}
                                 availableVoices={AVAILABLE_VOICES}
-                                clonedVoices={clonedVoices}
+                                clonedVoices={sortedClonedVoices}
                                 presets={presets}
                                 onUpdate={handleSpeakerUpdate}
                                 onCloneClick={() => setIsCloneModalOpen(true)}
@@ -460,6 +495,14 @@ const App: React.FC = () => {
         isOpen={isCloneModalOpen}
         onClose={() => setIsCloneModalOpen(false)}
         onSave={handleCloneSave}
+      />
+      
+      <ManageClonedVoicesModal 
+        isOpen={isManageVoicesModalOpen}
+        onClose={() => setIsManageVoicesModalOpen(false)}
+        voices={sortedClonedVoices}
+        onUpdate={handleUpdateClonedVoice}
+        onDelete={handleDeleteClonedVoice}
       />
     </div>
   );

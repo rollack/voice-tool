@@ -28,6 +28,29 @@ export const concatenateAudioBuffers = (buffers: AudioBuffer[]): AudioBuffer => 
   return result;
 };
 
+export const mixAudioBuffers = (speechBuffer: AudioBuffer, bgBuffer: AudioBuffer, bgVolume: number = 0.2): AudioBuffer => {
+  const channels = speechBuffer.numberOfChannels;
+  const length = speechBuffer.length;
+  const sampleRate = speechBuffer.sampleRate;
+
+  const mixed = audioContext.createBuffer(channels, length, sampleRate);
+
+  for (let c = 0; c < channels; c++) {
+    const speechData = speechBuffer.getChannelData(c);
+    // Handle mono/stereo mismatch by cycling channels if needed, or just picking 0 for mono bg
+    const bgChannelData = bgBuffer.getChannelData(c % bgBuffer.numberOfChannels);
+    const mixedData = mixed.getChannelData(c);
+
+    for (let i = 0; i < length; i++) {
+      // Loop background audio
+      const bgSample = bgChannelData[i % bgBuffer.length];
+      mixedData[i] = speechData[i] + (bgSample * bgVolume);
+    }
+  }
+
+  return mixed;
+};
+
 // Convert AudioBuffer to WAV Blob
 export const audioBufferToWav = (buffer: AudioBuffer): Blob => {
   const numOfChan = buffer.numberOfChannels;

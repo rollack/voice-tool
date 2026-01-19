@@ -24,6 +24,7 @@ export interface ClonedVoice {
   id: string;
   name: string;
   baseVoiceMap: string;
+  isFavorite?: boolean;
 }
 
 export interface VoicePreset {
